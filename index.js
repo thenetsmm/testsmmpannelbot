@@ -2,7 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const { Telegraf, Markup } = require('telegraf');
-const { MenuButton, Platform, User, Category, Service, Order, Coupon, Deposit, AdminLog, HelpRequest, Counter } = require('./models');
+const { MenuButton, Platform, User, Category, Service, Order, Coupon, Deposit, AdminLog, HelpRequest, Counter, TgAccount } = require('./models');
+const tgSession = require('./tg-session');
 const providers = require('./providers');
 const texts = require('./texts');
 const mountAdminPanel = require('./admin');
@@ -595,7 +596,6 @@ async function showShopHome(ctx) {
     `🔖 Username : ${esc(uname)}\n` +
     `💰 Balance : <b>${nf(u && u.balance)}</b> ကျပ်\n\n` +
     `👇 ဝယ်ယူလိုသည့် ဝန်ဆောင်မှု ရွေးပါရှင့်`;
-  // for now only these two buttons (Telegram Account is coming later)
   const kb = Markup.inlineKeyboard([
     [Markup.button.callback('📱 Telegram Account', 'tg_account')],
     [Markup.button.callback('🚀 Boost Service', 'boost')]
@@ -603,7 +603,105 @@ async function showShopHome(ctx) {
   return showInline(ctx, text, kb);
 }
 bot.action('shop_home', async (ctx) => { await ctx.answerCbQuery().catch(() => {}); st(ctx.from.id).level = 'root'; await showShopHome(ctx); });
-bot.action('tg_account', (ctx) => ctx.answerCbQuery('📱 Telegram Account ကို မကြာမီ ထည့်ပေးပါမယ်ရှင့် ❤️', { show_alert: true }).catch(() => {}));
+
+// ---- Telegram Account shop -------------------------------------------------
+// Account tap -> price + [Buy] -> phone number + [Get Code] -> latest login code.
+// Phone numbers + sessions are added from Admin Panel > TG Accounts.
+const tgPrice = () => Math.max(1, parseInt(texts.getRaw('tgacc_price'), 10) || 1200);
+const TGACC_MAX_CODE_REQUESTS = parseInt(process.env.TGACC_MAX_CODE_REQUESTS || '40', 10);
+const tgCodeCooldown = new Map(); // userId -> last "Get Code" tap (ms)
+const tgBuying = new Set();       // users with a purchase in progress (stops double taps)
+const tgGetCodeKb = (accId) => Markup.inlineKeyboard([[Markup.button.callback('📩 Get Code', `tgacc_code_${accId}`)]]);
+
+async function showTgAccountOffer(ctx) {
+  const uid = String(ctx.from.id);
+  const [stock, mine] = await Promise.all([TgAccount.countDocuments({ status: 'available' }), TgAccount.countDocuments({ soldTo: uid })]);
+  const rows = [];
+  let text;
+  if (texts.getRaw('tgacc_enabled') === '0') text = '📱 Telegram Account ကို ခေတ္တပိတ်ထားပါသည်ရှင့်။';
+  else if (stock < 1) text = texts.t('tgacc_out_of_stock');
+  else { text = texts.t('tgacc_offer', { price: nf(tgPrice()), stock }); rows.push([Markup.button.callback('🛒 Buy', 'tgacc_buy')]); }
+  if (mine) rows.push([Markup.button.callback(`📦 ကျွန်ုပ်ဝယ်ထားသော Account (${mine})`, 'tgacc_mine')]);
+  rows.push([Markup.button.callback('◀️ နောက်ပြန်', 'shop_home')]);
+  return showInline(ctx, text, Markup.inlineKeyboard(rows));
+}
+bot.action('tg_account', async (ctx) => { await ctx.answerCbQuery().catch(() => {}); await showTgAccountOffer(ctx); });
+
+bot.action('tgacc_buy', async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  const uid = String(ctx.from.id);
+  if (texts.getRaw('tgacc_enabled') === '0') return showTgAccountOffer(ctx);
+  if (tgBuying.has(uid)) return;
+  tgBuying.add(uid);
+  try {
+    const price = tgPrice();
+    // 1) take the money with one conditional update (cannot overspend)
+    const charged = await User.findOneAndUpdate(
+      { _id: uid, balance: { $gte: price } },
+      { $inc: { balance: -price, totalSpent: price } },
+      { new: true }
+    );
+    if (!charged) {
+      return ctx.reply(texts.t('insufficient_balance', { name: displayName(ctx.from) }),
+        Markup.inlineKeyboard([[Markup.button.callback('💰ငွေဖြည့်ရန်💰', 'go_topup')]]));
+    }
+    // 2) claim the oldest free account atomically (two buyers can never get the same one)
+    const acc = await TgAccount.findOneAndUpdate(
+      { status: 'available' },
+      { $set: { status: 'sold', soldTo: uid, soldAt: new Date(), price } },
+      { new: true, sort: { createdAt: 1 } }
+    );
+    if (!acc) {
+      await User.findByIdAndUpdate(uid, { $inc: { balance: price, totalSpent: -price } });
+      return showInline(ctx, texts.t('tgacc_out_of_stock'), Markup.inlineKeyboard([[Markup.button.callback('◀️ နောက်ပြန်', 'shop_home')]]));
+    }
+    await showInline(ctx, texts.t('tgacc_bought', { price: nf(price), phone: esc(acc.phone) }), tgGetCodeKb(acc._id));
+    const left = await TgAccount.countDocuments({ status: 'available' });
+    for (const id of ADMIN_IDS) await safeSend(id, `📱 Telegram Account ရောင်းရပါပြီ\n+${acc.phone} → ${displayName(ctx.from)} (${uid})\n💰 ${nf(price)} ကျပ် · လက်ကျန် ${left} Acc`).catch(() => {});
+  } catch (err) {
+    console.error('tgacc_buy failed:', err && err.message || err);
+    await ctx.reply(customerError()).catch(() => {});
+  } finally { tgBuying.delete(uid); }
+});
+
+bot.action('tgacc_mine', async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  const list = await TgAccount.find({ soldTo: String(ctx.from.id) }).sort({ soldAt: -1 }).limit(10).lean();
+  const rows = list.map(a => [Markup.button.callback(`📱 +${a.phone}`, `tgacc_view_${a._id}`)]);
+  rows.push([Markup.button.callback('◀️ နောက်ပြန်', 'tg_account')]);
+  return showInline(ctx, '📦 ဝယ်ထားသော Account များ\n\nCode ယူလိုတဲ့ နံပါတ်ကို ရွေးပါ 👇', Markup.inlineKeyboard(rows));
+});
+bot.action(/^tgacc_view_([0-9a-f]{24})$/, async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  const acc = await TgAccount.findOne({ _id: ctx.match[1], soldTo: String(ctx.from.id) }).lean();
+  if (!acc) return;
+  return showInline(ctx, texts.t('tgacc_bought', { price: nf(acc.price || 0), phone: esc(acc.phone) }), tgGetCodeKb(acc._id));
+});
+
+bot.action(/^tgacc_code_([0-9a-f]{24})$/, async (ctx) => {
+  const uid = String(ctx.from.id);
+  // only the buyer of THIS account can ask for its code
+  const acc = await TgAccount.findOne({ _id: ctx.match[1], soldTo: uid, status: 'sold' });
+  if (!acc) return ctx.answerCbQuery('❌ ဒီ Account မတွေ့ပါ', { show_alert: true }).catch(() => {});
+  const wait = 8000 - (Date.now() - (tgCodeCooldown.get(uid) || 0));
+  if (wait > 0) return ctx.answerCbQuery(texts.t('tgacc_code_wait', { sec: Math.ceil(wait / 1000) }), { show_alert: true }).catch(() => {});
+  if ((acc.codeRequests || 0) >= TGACC_MAX_CODE_REQUESTS) return ctx.answerCbQuery('Code တောင်းခွင့် ပြည့်သွားပါပြီ - Admin ကို ဆက်သွယ်ပါ', { show_alert: true }).catch(() => {});
+  tgCodeCooldown.set(uid, Date.now());
+  await ctx.answerCbQuery('⏳ Code ရှာနေပါတယ်...').catch(() => {});
+  let found;
+  try {
+    found = await tgSession.latestLoginCode(ai.decrypt(acc.sessionEnc));
+  } catch (err) {
+    console.error('tgacc get code failed:', err && err.message || err);
+    for (const id of ADMIN_IDS) await safeSend(id, `⚠️ TG Account +${acc.phone} ရဲ့ code ဖတ်မရပါ (${String(err && err.message || err).slice(0, 150)})\nPanel > TG Accounts မှာ session ကို စစ်ပါ။`).catch(() => {});
+    return ctx.reply(texts.t('tgacc_code_error'), tgGetCodeKb(acc._id));
+  }
+  await TgAccount.updateOne({ _id: acc._id }, { $inc: { codeRequests: 1 }, $set: { lastCodeAt: new Date() } });
+  if (!found) return ctx.reply(texts.t('tgacc_code_none'), { parse_mode: 'HTML', reply_markup: tgGetCodeKb(acc._id).reply_markup });
+  const secs = Math.max(0, Math.round((Date.now() - found.date.getTime()) / 1000));
+  const ago = secs < 60 ? `${secs} စက္ကန့်` : `${Math.round(secs / 60)} မိနစ်`;
+  return ctx.reply(texts.t('tgacc_code_ok', { code: found.code, ago }), { parse_mode: 'HTML', reply_markup: tgGetCodeKb(acc._id).reply_markup });
+});
 
 // ---- Boost Service: Facebook / Instagram / TikTok / Telegram ... (the "home buttons" admin created) ----
 async function showPlatformMenu(ctx) {

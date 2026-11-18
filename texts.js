@@ -127,6 +127,16 @@ EXAMPLES (Burmese tone)
   topup_success: 'ငွေ (${amount} ကျပ်) ထည့်ခြင်း အောင်မြင်ပါသည်ရှင့် ❤️',
   topup_rejected: '❌ သင့်ငွေဖြည့်တောင်းဆိုမှု (${amount} ကျပ်) ကို လက်မခံနိုင်ပါရှင့်။${reason}\nမှားယွင်းနေသည်ဟု ထင်ပါက Admin ကို ဆက်သွယ်ပေးပါနော်။',
   topup_edited: 'သင်ဖြည့်ထားသောငွေပမာဏမှာ ${amount} ဖြစ်သောကြောင့် သင့်အကောင့်ထဲသို့ ${amount} ကျပ် ထည့်ပေးထားပါတယ်ရှင့် ❤️',
+  // ---- Telegram Account shop
+  tgacc_price: process.env.TGACC_PRICE || '1200', // plain number: MMK for 1 account (edit from Panel > TG Accounts)
+  tgacc_enabled: '1', // 1 = on, 0 = button shows "coming soon"
+  tgacc_offer: '📱 <b>Telegram Account</b>\n\n💰 ကျသင့်ငွေ : 1 Acc = <b>${price}</b> ကျပ်\n📦 လက်ကျန် : ${stock} Acc\n\nဝယ်ယူရန် အောက်က <b>Buy</b> ကို နှိပ်ပါရှင့် 👇',
+  tgacc_out_of_stock: '😔 Account ပြည့်သွားပါပြီရှင့်၊ မကြာခင် ထပ်ထည့်ပေးပါမယ် ❤️',
+  tgacc_bought: '✅ ဝယ်ယူပြီးပါပြီရှင့် (${price} ကျပ် နှုတ်ယူပြီး)\n\n📱 Login ဝင်ရမည့် ဖုန်းနံပါတ်\n<code>+${phone}</code>\n\n1️⃣ Telegram app မှာ အပေါ်က ဖုန်းနံပါတ်နဲ့ Login ဝင်ပါ\n2️⃣ Code တောင်းပြီးမှ အောက်က <b>Get Code</b> ကို နှိပ်ပါ 👇',
+  tgacc_code_ok: '🔑 Login Code : <code>${code}</code>\n\n⏱ ${ago} က ရောက်လာတဲ့ code ပါရှင့်',
+  tgacc_code_none: '⏳ Code မရောက်သေးပါရှင့်။ Telegram app မှာ ဒီနံပါတ်နဲ့ Login ဝင်ပြီး code တောင်းပြီးမှ <b>Get Code</b> ကို ပြန်နှိပ်ပါနော်။',
+  tgacc_code_wait: 'ခဏစောင့်ပြီး (${sec} စက္ကန့်) ပြန်နှိပ်ပါရှင့်',
+  tgacc_code_error: '⚠️ Code ယူလို့ မရသေးပါရှင့်၊ ခဏနေပြီး ပြန်နှိပ်ပါ။ မရသေးရင် Admin ကို ဆက်သွယ်ပါနော်။',
   banned: 'သင့်အကောင့်ကို ယာယီ ပိတ်ထားပါသည်ရှင့်။ Admin ကို ဆက်သွယ်ပါ။'
 };
 

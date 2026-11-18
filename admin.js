@@ -9,7 +9,8 @@ const express = require('express');
 const crypto = require('crypto');
 const path = require('path');
 const axios = require('axios');
-const { Platform, User, Category, Service, Order, Coupon, Deposit, AdminLog, MenuButton, HelpRequest, Stat, ApiKey, AiUsage } = require('./models');
+const { Platform, User, Category, Service, Order, Coupon, Deposit, AdminLog, MenuButton, HelpRequest, Stat, ApiKey, AiUsage, TgAccount } = require('./models');
+const tgSession = require('./tg-session');
 const mongoose = require('mongoose');
 const retention = require('./retention');
 const ai = require('./ai');
@@ -962,6 +963,64 @@ module.exports = function mountAdminPanel(app, deps) {
     const c = await Coupon.findByIdAndDelete(String(req.params.code).toUpperCase());
     if (!c) throw fail(404, 'Coupon မတွေ့ပါ');
     log(req, 'coupon_delete', c._id);
+    res.json({ ok: true });
+  }));
+
+  // ======================================================================
+  // Telegram Accounts for sale (phone + encrypted session). The session string
+  // is never sent back to the browser.
+  // ======================================================================
+  const tgItem = (a) => ({ id: String(a._id), phone: a.phone, note: a.note || '', status: a.status, soldTo: a.soldTo || '', soldAt: a.soldAt, price: a.price || 0, codeRequests: a.codeRequests || 0, lastCodeAt: a.lastCodeAt, createdAt: a.createdAt });
+  api.get('/tgaccounts', wrap(async (req, res) => {
+    const rows = await TgAccount.find({}).sort({ createdAt: -1 }).limit(300).lean();
+    const count = (st) => rows.filter(a => a.status === st).length;
+    res.json({
+      price: Number(texts.getRaw('tgacc_price')) || 1200, enabled: texts.getRaw('tgacc_enabled') !== '0', apiConfigured: tgSession.configured(),
+      stats: { available: count('available'), sold: count('sold'), disabled: count('disabled') },
+      items: rows.map(tgItem)
+    });
+  }));
+  api.post('/tgaccounts', wrap(async (req, res) => {
+    const phone = String(req.body.phone || '').replace(/\D/g, '');
+    if (phone.length < 7 || phone.length > 15) throw fail(400, 'ဖုန်းနံပါတ် မမှန်ပါ (country code ပါအောင် - 959xxxxxxxxx)');
+    const session = String(req.body.session || '').replace(/\s+/g, '');
+    if (session.length < 100 || !/^[A-Za-z0-9+/=_-]+$/.test(session)) throw fail(400, 'Session string မမှန်ပါ (tools/make-session.js နဲ့ ထုတ်ထားတာ ထည့်ပါ)');
+    if (await TgAccount.exists({ phone })) throw fail(409, 'ဒီဖုန်းနံပါတ် ထည့်ပြီးသားပါ');
+    const a = await TgAccount.create({ phone, sessionEnc: ai.encrypt(session), note: str(req.body.note, 'Note', { max: 100, required: false }) });
+    log(req, 'tgaccount_add', phone);
+    res.json({ ok: true, item: tgItem(a) });
+  }));
+  api.post('/tgaccounts/settings', wrap(async (req, res) => {
+    if (req.body.price !== undefined) await texts.setText('tgacc_price', String(num(req.body.price, 'ဈေး', { min: 1, max: 10000000, int: true })));
+    if (req.body.enabled !== undefined) await texts.setText('tgacc_enabled', req.body.enabled ? '1' : '0');
+    log(req, 'tgaccount_settings', `price=${texts.getRaw('tgacc_price')} enabled=${texts.getRaw('tgacc_enabled')}`);
+    res.json({ ok: true });
+  }));
+  api.post('/tgaccounts/:id/check', wrap(async (req, res) => {
+    if (!mongoose.isValidObjectId(req.params.id)) throw fail(404, 'မတွေ့ပါ');
+    const a = await TgAccount.findById(req.params.id);
+    if (!a) throw fail(404, 'Account မတွေ့ပါ');
+    let r;
+    try { r = await tgSession.checkSession(ai.decrypt(a.sessionEnc)); }
+    catch (e) { throw fail(502, 'စစ်မရပါ: ' + String(e.message).slice(0, 150)); }
+    res.json({ ok: !!r.ok, phone: r.phone || '', name: r.name || '' });
+  }));
+  api.patch('/tgaccounts/:id', wrap(async (req, res) => {
+    if (!mongoose.isValidObjectId(req.params.id)) throw fail(404, 'မတွေ့ပါ');
+    const status = String(req.body.status || '');
+    if (!['available', 'disabled'].includes(status)) throw fail(400, 'status မမှန်ပါ');
+    const set = { status };
+    const unset = status === 'available' ? { soldTo: '', soldAt: '', price: '' } : {};
+    const a = await TgAccount.findByIdAndUpdate(req.params.id, Object.keys(unset).length ? { $set: set, $unset: unset } : { $set: set }, { new: true });
+    if (!a) throw fail(404, 'Account မတွေ့ပါ');
+    log(req, 'tgaccount_status', `${a.phone} -> ${status}`);
+    res.json({ ok: true, item: tgItem(a) });
+  }));
+  api.delete('/tgaccounts/:id', wrap(async (req, res) => {
+    if (!mongoose.isValidObjectId(req.params.id)) throw fail(404, 'မတွေ့ပါ');
+    const a = await TgAccount.findByIdAndDelete(req.params.id);
+    if (!a) throw fail(404, 'Account မတွေ့ပါ');
+    log(req, 'tgaccount_delete', a.phone);
     res.json({ ok: true });
   }));
 
