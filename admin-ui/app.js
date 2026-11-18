@@ -980,32 +980,31 @@
     const phone = h('input', { type: 'text', placeholder: 'ဖုန်းနံပါတ် (959123456789)', inputmode: 'numeric', maxlength: 20 });
     const session = h('textarea', { placeholder: 'Session string (tools/make-session.js နဲ့ ထုတ်ထားတာ)', rows: 3, autocomplete: 'off', spellcheck: 'false' });
     const note = h('input', { type: 'text', placeholder: 'Note (မထည့်လည်းရ)', maxlength: 100 });
-    const price = h('input', { type: 'number', inputmode: 'numeric', placeholder: 'ဈေး (ကျပ်)' });
+    const price = h('input', { type: 'number', inputmode: 'numeric', placeholder: 'ဒီ Account ရဲ့ ဈေး (ကျပ်) - ဥပမာ 1300' });
+    const twoStep = h('input', { type: 'text', placeholder: '2step password (မရှိရင် ထားခဲ့)', maxlength: 100, autocomplete: 'off' });
     const head = h('div', { class: 'card' });
     const list = h('div', {});
     const STATUS = { available: '🟢 ရောင်းရန်ရှိ', sold: '🔴 ရောင်းပြီး', disabled: '⚪ ပိတ်ထား' };
     view.append(
-      h('div', { class: 'card' }, h('h2', {}, 'Account အသစ်ထည့်ရန်'), h('div', { class: 'stack' }, phone, session, note,
+      h('div', { class: 'card' }, h('h2', {}, 'Account အသစ်ထည့်ရန်'), h('div', { class: 'stack' }, phone, price, twoStep, session, note,
         h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => {
-          await POST('/tgaccounts', { phone: phone.value, session: session.value, note: note.value });
-          toast('ထည့်ပြီး ✅', 'ok'); phone.value = session.value = note.value = ''; load();
+          await POST('/tgaccounts', { phone: phone.value, session: session.value, note: note.value, price: price.value, twoStep: twoStep.value });
+          toast('ထည့်ပြီး ✅', 'ok'); phone.value = session.value = note.value = twoStep.value = ''; load();
         }) }, 'ထည့်မည်'))),
       h('div', { style: 'height:12px' }), head, h('div', { style: 'height:12px' }), list);
     async function load() {
       let r; try { r = await GET('/tgaccounts'); } catch (e) { return fail(e); }
-      price.value = r.price;
-      head.replaceChildren(h('h2', {}, 'ဈေး / လက်ကျန်'), h('div', { class: 'stack' },
+      head.replaceChildren(h('h2', {}, 'လက်ကျန်'), h('div', { class: 'stack' },
         h('div', { class: 'muted small' }, `🟢 ${r.stats.available} · 🔴 ${r.stats.sold} · ⚪ ${r.stats.disabled}`),
         r.apiConfigured ? null : h('div', { class: 'muted small' }, '⚠️ TG_API_ID / TG_API_HASH environment မသတ်မှတ်ရသေးလို့ Get Code အလုပ်မလုပ်သေးပါ'),
-        h('div', { class: 'row nowrap' }, h('div', { class: 'grow' }, price),
-          h('button', { class: 'btn', onclick: (e) => busy(e.target, async () => { await POST('/tgaccounts/settings', { price: price.value }); toast('ဈေးပြောင်းပြီး ✅', 'ok'); load(); }) }, 'သိမ်းမည်')),
         h('label', { class: 'row' }, h('input', { type: 'checkbox', checked: r.enabled, onchange: (e) => busy(null, async () => { await POST('/tgaccounts/settings', { enabled: e.target.checked }); toast(e.target.checked ? 'ဖွင့်ပြီး' : 'ပိတ်ပြီး', 'ok'); }) }), ' Bot မှာ Telegram Account ရောင်းမည်')));
       list.replaceChildren(r.items.length ? h('div', { class: 'card' }, h('div', { class: 'list' }, r.items.map(a =>
         h('div', { class: 'item row nowrap' },
           h('div', { class: 'grow' },
-            h('strong', { class: 'mono' }, '+' + a.phone), h('div', { class: 'muted small' }, STATUS[a.status] + (a.note ? ' · ' + a.note : '')),
-            a.status === 'sold' ? h('div', { class: 'muted small' }, `User ${a.soldTo} · ${mmk(a.price)} · ${dt(a.soldAt)} · Code ${a.codeRequests} ကြိမ်`) : null),
+            h('strong', { class: 'mono' }, '+' + a.phone), h('div', { class: 'muted small' }, STATUS[a.status] + ' · ' + mmk(a.price) + (a.hasTwoStep ? ' · 2step ✓' : '') + (a.note ? ' · ' + a.note : '')),
+            a.status === 'sold' ? h('div', { class: 'muted small' }, `User ${a.soldTo} · ${dt(a.soldAt)} · Code ${a.codeRequests} ကြိမ်`) : null),
           h('button', { class: 'btn sm', onclick: (e) => busy(e.target, async () => { const c = await POST('/tgaccounts/' + a.id + '/check'); toast(c.ok ? 'Session အလုပ်လုပ်ပါတယ် ✅ ' + (c.name || '') : 'Session သက်တမ်းကုန်/မမှန်ပါ ❌', c.ok ? 'ok' : 'err'); }) }, 'စစ်'),
+          a.status !== 'sold' ? h('button', { class: 'btn sm', onclick: async () => { const v = await promptBox('ဈေးပြင်မည်: +' + a.phone, 'ဈေး (ကျပ်)', { value: String(a.price || ''), type: 'number', okLabel: 'သိမ်းမည်' }); if (!v) return; try { await PATCH('/tgaccounts/' + a.id, { price: v }); load(); } catch (e) { fail(e); } } }, 'ဈေး') : null,
           a.status === 'available' ? h('button', { class: 'btn sm', onclick: (e) => busy(e.target, async () => { await PATCH('/tgaccounts/' + a.id, { status: 'disabled' }); load(); }) }, 'ပိတ်') : null,
           a.status !== 'available' ? h('button', { class: 'btn sm', onclick: async (e) => { if (a.status === 'sold' && !(await confirmBox('ပြန်ရောင်းမည်', '+' + a.phone + ' ကို ရောင်းရန်စာရင်းပြန်ထည့်မှာ သေချာပါသလား? (ဝယ်သူ record ပျက်သွားမယ်)', 'ပြန်ထည့်မည်'))) return; busy(e.target, async () => { await PATCH('/tgaccounts/' + a.id, { status: 'available' }); load(); }); } }, 'ပြန်ရောင်း') : null,
           h('button', { class: 'btn sm danger', onclick: async () => { if (await confirmBox('Account ဖျက်မည်', '+' + a.phone, 'ဖျက်မည်', true)) { try { await DEL('/tgaccounts/' + a.id); load(); } catch (e) { fail(e); } } } }, '🗑'))))) : empty('Account မရှိသေးပါ'));
