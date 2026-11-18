@@ -546,7 +546,7 @@ async function sendHistory(ctx, page = 1, edit = false) {
   }
   return ctx.reply(text, extra);
 }
-bot.hears([BTN_HISTORY, LEGACY_HISTORY], async (ctx) => { resetState(ctx.from.id); await sendHistory(ctx, 1); });
+bot.hears([BTN_HISTORY, LEGACY_HISTORY], async (ctx) => { resetState(ctx.from.id); await showHistoryMenu(ctx); });
 bot.action(/^hist_(\d+)$/, async (ctx) => { await ctx.answerCbQuery().catch(() => {}); await sendHistory(ctx, parseInt(ctx.match[1], 10), true); });
 bot.action('noop', (ctx) => ctx.answerCbQuery().catch(() => {}));
 
@@ -605,102 +605,184 @@ async function showShopHome(ctx) {
 bot.action('shop_home', async (ctx) => { await ctx.answerCbQuery().catch(() => {}); st(ctx.from.id).level = 'root'; await showShopHome(ctx); });
 
 // ---- Telegram Account shop -------------------------------------------------
-// Account tap -> price + [Buy] -> phone number + [Get Code] -> latest login code.
-// Phone numbers + sessions are added from Admin Panel > TG Accounts.
-const tgPrice = () => Math.max(1, parseInt(texts.getRaw('tgacc_price'), 10) || 1200);
+// Shop: [Buy Account] -> name/balance/price + [ဝယ်မည်] -> phone + 2step psw + [Get Otp]
+// History > Account ဝယ်ယူမှုမှတ်တမ်း -> number -> [Profile] [Code ယူရန်] [Remove From History]
+// Phone / session / 2step / price are added per account in Admin Panel > TG Accounts.
 const TGACC_MAX_CODE_REQUESTS = parseInt(process.env.TGACC_MAX_CODE_REQUESTS || '40', 10);
-const tgCodeCooldown = new Map(); // userId -> last "Get Code" tap (ms)
+const TGACC_HISTORY_DAYS = 10;
+const tgCodeCooldown = new Map(); // userId -> last code request (ms)
 const tgBuying = new Set();       // users with a purchase in progress (stops double taps)
-const tgGetCodeKb = (accId) => Markup.inlineKeyboard([[Markup.button.callback('📩 Get Code', `tgacc_code_${accId}`)]]);
+const OID = '([0-9a-f]{24})';
+const tgPwOf = (acc) => { try { return acc.twoStepEnc ? ai.decrypt(acc.twoStepEnc) : ''; } catch (_) { return ''; } };
+const copyBtn = (label, text) => ({ text: label, copy_text: { text: String(text).slice(0, 256) } });
+const tgBoughtText = (acc) => texts.t('tgacc_bought', { phone: esc(acc.phone), pw: esc(tgPwOf(acc) || 'မရှိပါ') });
+const tgOwned = (ctx, id) => TgAccount.findOne({ _id: id, soldTo: String(ctx.from.id), status: 'sold' });
+const tgHomeBack = () => Markup.inlineKeyboard([[Markup.button.callback('◀️ နောက်ပြန်', 'shop_home')]]);
 
+// ---- shop screen
 async function showTgAccountOffer(ctx) {
-  const uid = String(ctx.from.id);
-  const [stock, mine] = await Promise.all([TgAccount.countDocuments({ status: 'available' }), TgAccount.countDocuments({ soldTo: uid })]);
-  const rows = [];
-  let text;
-  if (texts.getRaw('tgacc_enabled') === '0') text = '📱 Telegram Account ကို ခေတ္တပိတ်ထားပါသည်ရှင့်။';
-  else if (stock < 1) text = texts.t('tgacc_out_of_stock');
-  else { text = texts.t('tgacc_offer', { price: nf(tgPrice()), stock }); rows.push([Markup.button.callback('🛒 Buy', 'tgacc_buy')]); }
-  if (mine) rows.push([Markup.button.callback(`📦 ကျွန်ုပ်ဝယ်ထားသော Account (${mine})`, 'tgacc_mine')]);
-  rows.push([Markup.button.callback('◀️ နောက်ပြန်', 'shop_home')]);
-  return showInline(ctx, text, Markup.inlineKeyboard(rows));
+  if (texts.getRaw('tgacc_enabled') === '0') return showInline(ctx, '📱 Telegram Account ကို ခေတ္တပိတ်ထားပါသည်ရှင့်။', tgHomeBack());
+  const stock = await TgAccount.countDocuments({ status: 'available' });
+  if (stock < 1) return showInline(ctx, texts.t('tgacc_out'), Markup.inlineKeyboard([[Markup.button.callback('Out Of Stock', 'tgacc_oos')]]));
+  return showInline(ctx, texts.t('tgacc_instock'), Markup.inlineKeyboard([[Markup.button.callback('Buy Account', 'tgacc_buy')]]));
 }
 bot.action('tg_account', async (ctx) => { await ctx.answerCbQuery().catch(() => {}); await showTgAccountOffer(ctx); });
+bot.action('tgacc_oos', (ctx) => ctx.answerCbQuery('အကောင့်ကုန်နေပါသည်', { show_alert: true }).catch(() => {}));
 
+// ---- Buy Account: show balance + price of the next account in line
 bot.action('tgacc_buy', async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
-  const uid = String(ctx.from.id);
   if (texts.getRaw('tgacc_enabled') === '0') return showTgAccountOffer(ctx);
+  const acc = await TgAccount.findOne({ status: 'available' }).sort({ createdAt: 1 }).lean();
+  if (!acc) return showTgAccountOffer(ctx);
+  const u = ctx.dbUser || await User.findById(String(ctx.from.id));
+  const text = texts.t('tgacc_confirm', { name: esc(displayName(ctx.from)), balance: nf(u && u.balance), price: nf(acc.price) });
+  return showInline(ctx, text, Markup.inlineKeyboard([[Markup.button.callback('ဝယ်မည်', `tgacc_go_${acc._id}`)]]));
+});
+
+// ---- ဝယ်မည်: claim THAT account, take its price, hand over phone + 2step
+bot.action(new RegExp(`^tgacc_go_${OID}$`), async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  const uid = String(ctx.from.id);
   if (tgBuying.has(uid)) return;
   tgBuying.add(uid);
   try {
-    const price = tgPrice();
-    // 1) take the money with one conditional update (cannot overspend)
+    const acc = await TgAccount.findOneAndUpdate(
+      { _id: ctx.match[1], status: 'available' },
+      { $set: { status: 'sold', soldTo: uid, soldAt: new Date(), hidden: false } },
+      { new: true }
+    );
+    if (!acc) return showTgAccountOffer(ctx); // someone else got it first / admin removed it
+    const price = Math.max(0, Number(acc.price) || 0);
     const charged = await User.findOneAndUpdate(
       { _id: uid, balance: { $gte: price } },
       { $inc: { balance: -price, totalSpent: price } },
       { new: true }
     );
     if (!charged) {
+      await TgAccount.updateOne({ _id: acc._id }, { $set: { status: 'available' }, $unset: { soldTo: '', soldAt: '' } });
       return ctx.reply(texts.t('insufficient_balance', { name: displayName(ctx.from) }),
         Markup.inlineKeyboard([[Markup.button.callback('💰ငွေဖြည့်ရန်💰', 'go_topup')]]));
     }
-    // 2) claim the oldest free account atomically (two buyers can never get the same one)
-    const acc = await TgAccount.findOneAndUpdate(
-      { status: 'available' },
-      { $set: { status: 'sold', soldTo: uid, soldAt: new Date(), price } },
-      { new: true, sort: { createdAt: 1 } }
-    );
-    if (!acc) {
-      await User.findByIdAndUpdate(uid, { $inc: { balance: price, totalSpent: -price } });
-      return showInline(ctx, texts.t('tgacc_out_of_stock'), Markup.inlineKeyboard([[Markup.button.callback('◀️ နောက်ပြန်', 'shop_home')]]));
-    }
-    await showInline(ctx, texts.t('tgacc_bought', { price: nf(price), phone: esc(acc.phone) }), tgGetCodeKb(acc._id));
+    await showInline(ctx, tgBoughtText(acc), Markup.inlineKeyboard([[Markup.button.callback('Get Otp', `tgacc_otp_${acc._id}`)]]));
     const left = await TgAccount.countDocuments({ status: 'available' });
     for (const id of ADMIN_IDS) await safeSend(id, `📱 Telegram Account ရောင်းရပါပြီ\n+${acc.phone} → ${displayName(ctx.from)} (${uid})\n💰 ${nf(price)} ကျပ် · လက်ကျန် ${left} Acc`).catch(() => {});
   } catch (err) {
-    console.error('tgacc_buy failed:', err && err.message || err);
+    console.error('tgacc_go failed:', err && err.message || err);
     await ctx.reply(customerError()).catch(() => {});
   } finally { tgBuying.delete(uid); }
 });
 
-bot.action('tgacc_mine', async (ctx) => {
-  await ctx.answerCbQuery().catch(() => {});
-  const list = await TgAccount.find({ soldTo: String(ctx.from.id) }).sort({ soldAt: -1 }).limit(10).lean();
-  const rows = list.map(a => [Markup.button.callback(`📱 +${a.phone}`, `tgacc_view_${a._id}`)]);
-  rows.push([Markup.button.callback('◀️ နောက်ပြန်', 'tg_account')]);
-  return showInline(ctx, '📦 ဝယ်ထားသော Account များ\n\nCode ယူလိုတဲ့ နံပါတ်ကို ရွေးပါ 👇', Markup.inlineKeyboard(rows));
-});
-bot.action(/^tgacc_view_([0-9a-f]{24})$/, async (ctx) => {
-  await ctx.answerCbQuery().catch(() => {});
-  const acc = await TgAccount.findOne({ _id: ctx.match[1], soldTo: String(ctx.from.id) }).lean();
-  if (!acc) return;
-  return showInline(ctx, texts.t('tgacc_bought', { price: nf(acc.price || 0), phone: esc(acc.phone) }), tgGetCodeKb(acc._id));
-});
-
-bot.action(/^tgacc_code_([0-9a-f]{24})$/, async (ctx) => {
+// ---- reading a code (Get Otp / 5min code / old latest code)
+// mode: otp | c5 (last 5 min) | old (newest ever)
+async function runTgCode(ctx, accId, mode) {
   const uid = String(ctx.from.id);
-  // only the buyer of THIS account can ask for its code
-  const acc = await TgAccount.findOne({ _id: ctx.match[1], soldTo: uid, status: 'sold' });
+  const acc = await tgOwned(ctx, accId);
   if (!acc) return ctx.answerCbQuery('❌ ဒီ Account မတွေ့ပါ', { show_alert: true }).catch(() => {});
   const wait = 8000 - (Date.now() - (tgCodeCooldown.get(uid) || 0));
   if (wait > 0) return ctx.answerCbQuery(texts.t('tgacc_code_wait', { sec: Math.ceil(wait / 1000) }), { show_alert: true }).catch(() => {});
   if ((acc.codeRequests || 0) >= TGACC_MAX_CODE_REQUESTS) return ctx.answerCbQuery('Code တောင်းခွင့် ပြည့်သွားပါပြီ - Admin ကို ဆက်သွယ်ပါ', { show_alert: true }).catch(() => {});
   tgCodeCooldown.set(uid, Date.now());
-  await ctx.answerCbQuery('⏳ Code ရှာနေပါတယ်...').catch(() => {});
+  await ctx.answerCbQuery().catch(() => {});
+
+  const wk = mode === 'otp' ? 'tgacc_checking_otp' : mode === 'c5' ? 'tgacc_checking_code' : 'tgacc_checking_old';
+  const note = await ctx.reply(texts.t(wk));
+  const chatId = note.chat.id, msgId = note.message_id;
+  const editNote = (t, extra) => bot.telegram.editMessageText(chatId, msgId, undefined, t, Object.assign({ parse_mode: 'HTML' }, extra || {})).catch(() => {});
+
   let found;
   try {
-    found = await tgSession.latestLoginCode(ai.decrypt(acc.sessionEnc));
+    found = await tgSession.latestLoginCode(ai.decrypt(acc.sessionEnc), mode === 'old' ? Infinity : 5);
   } catch (err) {
     console.error('tgacc get code failed:', err && err.message || err);
     for (const id of ADMIN_IDS) await safeSend(id, `⚠️ TG Account +${acc.phone} ရဲ့ code ဖတ်မရပါ (${String(err && err.message || err).slice(0, 150)})\nPanel > TG Accounts မှာ session ကို စစ်ပါ။`).catch(() => {});
-    return ctx.reply(texts.t('tgacc_code_error'), tgGetCodeKb(acc._id));
+    return editNote(texts.t('tgacc_code_error'));
   }
   await TgAccount.updateOne({ _id: acc._id }, { $inc: { codeRequests: 1 }, $set: { lastCodeAt: new Date() } });
-  if (!found) return ctx.reply(texts.t('tgacc_code_none'), { parse_mode: 'HTML', reply_markup: tgGetCodeKb(acc._id).reply_markup });
+  if (!found) return editNote(texts.t(mode === 'old' ? 'tgacc_none_old' : 'tgacc_none5'));
+
+  await bot.telegram.deleteMessage(chatId, msgId).catch(() => {}); // the "checking..." note disappears
+  const pw = tgPwOf(acc);
+  if (mode === 'otp') {
+    const kb = pw ? [[copyBtn('💌 Copy 2step psw', pw)]] : [];
+    return ctx.reply(texts.t('tgacc_otp_ok', { code: found.code }), { parse_mode: 'HTML', reply_markup: { inline_keyboard: kb } });
+  }
   const secs = Math.max(0, Math.round((Date.now() - found.date.getTime()) / 1000));
-  const ago = secs < 60 ? `${secs} စက္ကန့်` : `${Math.round(secs / 60)} မိနစ်`;
-  return ctx.reply(texts.t('tgacc_code_ok', { code: found.code, ago }), { parse_mode: 'HTML', reply_markup: tgGetCodeKb(acc._id).reply_markup });
+  const ago = secs < 60 ? `${secs} စက္ကန့်` : secs < 3600 ? `${Math.round(secs / 60)} မိနစ်` : secs < 86400 ? `${Math.round(secs / 3600)} နာရီ` : `${Math.round(secs / 86400)} ရက်`;
+  const row = [copyBtn('💌 Copy Code', found.code)];
+  if (pw) row.push(copyBtn('💌 Copy 2Step', pw));
+  return ctx.reply(texts.t(mode === 'old' ? 'tgacc_code_ok_old' : 'tgacc_code_ok', { code: found.code, ago }), { parse_mode: 'HTML', reply_markup: { inline_keyboard: [row] } });
+}
+// tgacc_code_ = button on messages sent by the first version of this feature
+bot.action(new RegExp(`^tgacc_(?:otp|code)_${OID}$`), (ctx) => runTgCode(ctx, ctx.match[1], 'otp'));
+bot.action(new RegExp(`^tgacc_c5_${OID}$`), (ctx) => runTgCode(ctx, ctx.match[1], 'c5'));
+bot.action(new RegExp(`^tgacc_old_${OID}$`), (ctx) => runTgCode(ctx, ctx.match[1], 'old'));
+
+// ---- History: Orders History menu -> Account / Boost
+bot.action('hist_menu', async (ctx) => { await ctx.answerCbQuery().catch(() => {}); await showHistoryMenu(ctx); });
+async function showHistoryMenu(ctx) {
+  return showInline(ctx, texts.t('tgacc_hist_menu'), Markup.inlineKeyboard([
+    [Markup.button.callback('Account ဝယ်ယူမှုမှတ်တမ်း', 'tgh_1')],
+    [Markup.button.callback('Boost မှတ်တမ်း', 'hist_boost')]
+  ]));
+}
+bot.action('hist_boost', async (ctx) => { await ctx.answerCbQuery().catch(() => {}); await sendHistory(ctx, 1, true); });
+
+async function showTgHistory(ctx, page) {
+  const q = { soldTo: String(ctx.from.id), status: 'sold', hidden: { $ne: true }, soldAt: { $gte: new Date(Date.now() - TGACC_HISTORY_DAYS * 86400000) } };
+  const per = 5;
+  const total = await TgAccount.countDocuments(q);
+  const back = [Markup.button.callback('◀️ နောက်ပြန်', 'hist_menu')];
+  if (!total) return showInline(ctx, '📜 ဝယ်ယူမှုမှတ်တမ်း မရှိသေးပါရှင့်။', Markup.inlineKeyboard([back]));
+  const pages = Math.ceil(total / per);
+  page = Math.min(Math.max(1, page), pages);
+  const list = await TgAccount.find(q).sort({ soldAt: -1 }).skip((page - 1) * per).limit(per).lean();
+  const rows = list.map(a => [Markup.button.callback(`📱 +${a.phone}`, `tgacc_view_${a._id}`)]);
+  if (pages > 1) {
+    const nav = [];
+    if (page > 1) nav.push(Markup.button.callback('◀️ Back', `tgh_${page - 1}`));
+    nav.push(Markup.button.callback(`${page}/${pages}`, 'noop'));
+    if (page < pages) nav.push(Markup.button.callback('Next ▶️', `tgh_${page + 1}`));
+    rows.push(nav);
+  }
+  rows.push(back);
+  return showInline(ctx, texts.t('tgacc_hist'), Markup.inlineKeyboard(rows));
+}
+bot.action(/^tgh_(\d+)$/, async (ctx) => { await ctx.answerCbQuery().catch(() => {}); await showTgHistory(ctx, parseInt(ctx.match[1], 10)); });
+
+// one number: [Profile ကိုကြည့်ရန်] [Code ယူရန်] [Remove From History]
+bot.action(new RegExp(`^tgacc_view_${OID}$`), async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  const acc = await tgOwned(ctx, ctx.match[1]);
+  if (!acc) return;
+  return showInline(ctx, `📱 <code>+${esc(acc.phone)}</code>`, Markup.inlineKeyboard([
+    [Markup.button.callback('Profile ကိုကြည့်ရန်', `tgacc_pf_${acc._id}`)],
+    [Markup.button.callback('Code ယူရန်', `tgacc_menu_${acc._id}`)],
+    [Markup.button.callback('Remove From History', `tgacc_rm_${acc._id}`)]
+  ]));
+});
+bot.action(new RegExp(`^tgacc_pf_${OID}$`), async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  const acc = await tgOwned(ctx, ctx.match[1]);
+  if (!acc) return;
+  const pw = tgPwOf(acc);
+  const kb = [];
+  if (pw) kb.push([copyBtn('💌 Copy 2Step', pw)]);
+  kb.push([{ text: '◀️ နောက်ပြန်', callback_data: `tgacc_view_${acc._id}` }]);
+  return showInline(ctx, tgBoughtText(acc), { reply_markup: { inline_keyboard: kb } });
+});
+bot.action(new RegExp(`^tgacc_menu_${OID}$`), async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  const acc = await tgOwned(ctx, ctx.match[1]);
+  if (!acc) return;
+  return ctx.reply(texts.t('tgacc_code_choose'), Markup.inlineKeyboard([
+    [Markup.button.callback('5min code', `tgacc_c5_${acc._id}`), Markup.button.callback('old lastest code', `tgacc_old_${acc._id}`)]
+  ]));
+});
+bot.action(new RegExp(`^tgacc_rm_${OID}$`), async (ctx) => {
+  await ctx.answerCbQuery('History ကနေ ဖယ်ပြီးပါပြီ ✅').catch(() => {});
+  await TgAccount.updateOne({ _id: ctx.match[1], soldTo: String(ctx.from.id) }, { $set: { hidden: true } });
+  return showTgHistory(ctx, 1);
 });
 
 // ---- Boost Service: Facebook / Instagram / TikTok / Telegram ... (the "home buttons" admin created) ----

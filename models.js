@@ -190,11 +190,13 @@ const AiUsageSchema = new mongoose.Schema({
 const TgAccountSchema = new mongoose.Schema({
   phone: { type: String, required: true, unique: true }, // digits only, with country code, e.g. 959123456789
   sessionEnc: { type: String, required: true },
+  twoStepEnc: String, // optional 2-step (cloud) password, encrypted - shown to the buyer
+  hidden: { type: Boolean, default: false }, // buyer removed it from their History (the account itself is untouched)
   note: String,
   status: { type: String, enum: ['available', 'sold', 'disabled'], default: 'available', index: true },
   soldTo: { type: String, index: true },
   soldAt: Date,
-  price: Number, // MMK the customer paid
+  price: Number, // MMK price of THIS account (set by admin when adding it; also what the buyer paid)
   codeRequests: { type: Number, default: 0 },
   lastCodeAt: Date,
   createdAt: { type: Date, default: Date.now }

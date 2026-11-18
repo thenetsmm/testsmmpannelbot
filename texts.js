@@ -128,15 +128,24 @@ EXAMPLES (Burmese tone)
   topup_rejected: '❌ သင့်ငွေဖြည့်တောင်းဆိုမှု (${amount} ကျပ်) ကို လက်မခံနိုင်ပါရှင့်။${reason}\nမှားယွင်းနေသည်ဟု ထင်ပါက Admin ကို ဆက်သွယ်ပေးပါနော်။',
   topup_edited: 'သင်ဖြည့်ထားသောငွေပမာဏမှာ ${amount} ဖြစ်သောကြောင့် သင့်အကောင့်ထဲသို့ ${amount} ကျပ် ထည့်ပေးထားပါတယ်ရှင့် ❤️',
   // ---- Telegram Account shop
-  tgacc_price: process.env.TGACC_PRICE || '1200', // plain number: MMK for 1 account (edit from Panel > TG Accounts)
-  tgacc_enabled: '1', // 1 = on, 0 = button shows "coming soon"
-  tgacc_offer: '📱 <b>Telegram Account</b>\n\n💰 ကျသင့်ငွေ : 1 Acc = <b>${price}</b> ကျပ်\n📦 လက်ကျန် : ${stock} Acc\n\nဝယ်ယူရန် အောက်က <b>Buy</b> ကို နှိပ်ပါရှင့် 👇',
-  tgacc_out_of_stock: '😔 Account ပြည့်သွားပါပြီရှင့်၊ မကြာခင် ထပ်ထည့်ပေးပါမယ် ❤️',
-  tgacc_bought: '✅ ဝယ်ယူပြီးပါပြီရှင့် (${price} ကျပ် နှုတ်ယူပြီး)\n\n📱 Login ဝင်ရမည့် ဖုန်းနံပါတ်\n<code>+${phone}</code>\n\n1️⃣ Telegram app မှာ အပေါ်က ဖုန်းနံပါတ်နဲ့ Login ဝင်ပါ\n2️⃣ Code တောင်းပြီးမှ အောက်က <b>Get Code</b> ကို နှိပ်ပါ 👇',
-  tgacc_code_ok: '🔑 Login Code : <code>${code}</code>\n\n⏱ ${ago} က ရောက်လာတဲ့ code ပါရှင့်',
-  tgacc_code_none: '⏳ Code မရောက်သေးပါရှင့်။ Telegram app မှာ ဒီနံပါတ်နဲ့ Login ဝင်ပြီး code တောင်းပြီးမှ <b>Get Code</b> ကို ပြန်နှိပ်ပါနော်။',
+  tgacc_enabled: '1', // 1 = on, 0 = shop button says "closed"
+  tgacc_instock: '📱 <b>Telegram Account</b>\n\n✅ Account Instock',
+  tgacc_out: '📱 <b>Telegram Account</b>\n\n😔 အကောင့်ကုန်နေပါသည်',
+  tgacc_confirm: 'username : ${name}\nBalance : <b>${balance}</b> ကျပ်\n\nအကောင့်စျေးနှုန်း <b>${price}</b> ကျပ် ကျပါသည် ဝယ်ယူမည်လား',
+  tgacc_bought: '✅ ဝယ်ယူပြီးပါပြီ\n\nphone number : <code>+${phone}</code>\n2step psw : <code>${pw}</code>',
+  tgacc_checking_otp: '⏳ 5မိနစ်အတွင်း ပို့ထားသည့် Otp ရယူနေပါသည် 1-20s စောင့်ပေးပါ….',
+  tgacc_checking_code: '⏳ 5မိနစ်အတွင်း ပို့ထားသည့် code ကို စစ်ဆေးနေပါသည် 1-20Second စောင့်ဆိုင်းပေးပါ….',
+  tgacc_checking_old: '⏳ နောက်ဆုံးပို့ထားသည့် code ကို စစ်ဆေးနေပါသည် 1-20Second စောင့်ဆိုင်းပေးပါ….',
+  tgacc_otp_ok: 'OTP Code : <code>${code}</code>',
+  tgacc_code_ok: 'အတည်ပြုcodeမှာ <code>${code}</code>',
+  tgacc_code_ok_old: 'အတည်ပြုcodeမှာ <code>${code}</code>\n\n⏱ ${ago} က ပို့ထားတဲ့ code ပါ',
+  tgacc_none5: '⏳ 5မိနစ်အတွင်း ပို့ထားသော code မတွေ့ပါရှင့်။ Telegram app မှာ ဒီနံပါတ်နဲ့ Login ဝင်ပြီး code တောင်းပြီးမှ ပြန်နှိပ်ပါနော်။',
+  tgacc_none_old: 'ဒီနံပါတ်ဆီ ပို့ထားတဲ့ code မတွေ့ပါရှင့်။',
   tgacc_code_wait: 'ခဏစောင့်ပြီး (${sec} စက္ကန့်) ပြန်နှိပ်ပါရှင့်',
   tgacc_code_error: '⚠️ Code ယူလို့ မရသေးပါရှင့်၊ ခဏနေပြီး ပြန်နှိပ်ပါ။ မရသေးရင် Admin ကို ဆက်သွယ်ပါနော်။',
+  tgacc_hist_menu: '📜 Orders History ကိုရွေးချယ်ပါ',
+  tgacc_hist: 'သင်ဝယ်ယူထားသောနံပါတ်များ\n(10ရက်ပြည့်လျှင် ဝယ်ယူမှုမှတ်တမ်း History အလိုလျောက်ပျက်ပါမည်)\n<b>(Account ပျက်ခြင်း မဟုတ်ပါ)</b>',
+  tgacc_code_choose: 'ကြိုက်နှစ်သက်ရာရွေးချယ်ပါ\n\n• 5မိနစ်အတွင်းပို့ထားသောCodeကိုကြည့်ရန်\n• အရင်ကနောက်ဆုံးပို့ထားသောcodeကိုကြည့်ရန်',
   banned: 'သင့်အကောင့်ကို ယာယီ ပိတ်ထားပါသည်ရှင့်။ Admin ကို ဆက်သွယ်ပါ။'
 };
 
