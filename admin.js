@@ -989,6 +989,10 @@ module.exports = function mountAdminPanel(app, deps) {
     const price = num(req.body.price, 'ဈေး', { min: 1, max: 10000000, int: true });
     const twoStep = str(req.body.twoStep, '2step password', { max: 100, required: false });
     const a = await TgAccount.create({ phone, sessionEnc: ai.encrypt(session), price, twoStepEnc: twoStep ? ai.encrypt(twoStep) : undefined, note: str(req.body.note, 'Note', { max: 100, required: false }) });
+    // best effort: remember the account's own Telegram id/username for the buyer's Profile link
+    if (tgSession.configured()) {
+      try { const r = await tgSession.checkSession(session); if (r.ok) await TgAccount.updateOne({ _id: a._id }, { $set: { tgUserId: r.id, tgUsername: r.username } }); } catch (_) { /* can be filled later with the စစ် button */ }
+    }
     log(req, 'tgaccount_add', phone);
     res.json({ ok: true, item: tgItem(a) });
   }));
@@ -1004,6 +1008,7 @@ module.exports = function mountAdminPanel(app, deps) {
     let r;
     try { r = await tgSession.checkSession(ai.decrypt(a.sessionEnc)); }
     catch (e) { throw fail(502, 'စစ်မရပါ: ' + String(e.message).slice(0, 150)); }
+    if (r.ok) await TgAccount.updateOne({ _id: a._id }, { $set: { tgUserId: r.id, tgUsername: r.username } });
     res.json({ ok: !!r.ok, phone: r.phone || '', name: r.name || '' });
   }));
   api.patch('/tgaccounts/:id', wrap(async (req, res) => {

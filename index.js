@@ -539,6 +539,7 @@ async function sendHistory(ctx, page = 1, edit = false) {
     if (page < pages) nav.push(Markup.button.callback('ရှေ့ ▶️', `hist_${page + 1}`));
     rows.push(nav);
   }
+  rows.push([Markup.button.callback('◀️ Back', 'hist_menu')]);
   const extra = { parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: Markup.inlineKeyboard(rows).reply_markup };
   const text = lines.join('\n\n');
   if (edit) {
@@ -623,8 +624,8 @@ const tgHomeBack = () => Markup.inlineKeyboard([[Markup.button.callback('◀️ 
 async function showTgAccountOffer(ctx) {
   if (texts.getRaw('tgacc_enabled') === '0') return showInline(ctx, '📱 Telegram Account ကို ခေတ္တပိတ်ထားပါသည်ရှင့်။', tgHomeBack());
   const stock = await TgAccount.countDocuments({ status: 'available' });
-  if (stock < 1) return showInline(ctx, texts.t('tgacc_out'), Markup.inlineKeyboard([[Markup.button.callback('Out Of Stock', 'tgacc_oos')]]));
-  return showInline(ctx, texts.t('tgacc_instock'), Markup.inlineKeyboard([[Markup.button.callback('Buy Account', 'tgacc_buy')]]));
+  if (stock < 1) return showInline(ctx, texts.t('tgacc_out'), Markup.inlineKeyboard([[Markup.button.callback('Out Of Stock', 'tgacc_oos')], [Markup.button.callback('◀️ Back', 'shop_home')]]));
+  return showInline(ctx, texts.t('tgacc_instock'), Markup.inlineKeyboard([[Markup.button.callback('Buy Account', 'tgacc_buy')], [Markup.button.callback('◀️ Back', 'shop_home')]]));
 }
 bot.action('tg_account', async (ctx) => { await ctx.answerCbQuery().catch(() => {}); await showTgAccountOffer(ctx); });
 bot.action('tgacc_oos', (ctx) => ctx.answerCbQuery('အကောင့်ကုန်နေပါသည်', { show_alert: true }).catch(() => {}));
@@ -637,7 +638,7 @@ bot.action('tgacc_buy', async (ctx) => {
   if (!acc) return showTgAccountOffer(ctx);
   const u = ctx.dbUser || await User.findById(String(ctx.from.id));
   const text = texts.t('tgacc_confirm', { name: esc(displayName(ctx.from)), balance: nf(u && u.balance), price: nf(acc.price) });
-  return showInline(ctx, text, Markup.inlineKeyboard([[Markup.button.callback('ဝယ်မည်', `tgacc_go_${acc._id}`)]]));
+  return showInline(ctx, text, Markup.inlineKeyboard([[Markup.button.callback('ဝယ်မည်', `tgacc_go_${acc._id}`)], [Markup.button.callback('◀️ Back', 'tg_account')]]));
 });
 
 // ---- ဝယ်မည်: claim THAT account, take its price, hand over phone + 2step
@@ -664,7 +665,7 @@ bot.action(new RegExp(`^tgacc_go_${OID}$`), async (ctx) => {
       return ctx.reply(texts.t('insufficient_balance', { name: displayName(ctx.from) }),
         Markup.inlineKeyboard([[Markup.button.callback('💰ငွေဖြည့်ရန်💰', 'go_topup')]]));
     }
-    await showInline(ctx, tgBoughtText(acc), Markup.inlineKeyboard([[Markup.button.callback('Get Otp', `tgacc_otp_${acc._id}`)]]));
+    await showInline(ctx, tgBoughtText(acc), Markup.inlineKeyboard([[Markup.button.callback('Get Otp', `tgacc_otp_${acc._id}`)], [Markup.button.callback('◀️ Back', 'shop_home')]]));
     const left = await TgAccount.countDocuments({ status: 'available' });
     for (const id of ADMIN_IDS) await safeSend(id, `📱 Telegram Account ရောင်းရပါပြီ\n+${acc.phone} → ${displayName(ctx.from)} (${uid})\n💰 ${nf(price)} ကျပ် · လက်ကျန် ${left} Acc`).catch(() => {});
   } catch (err) {
@@ -758,17 +759,31 @@ bot.action(new RegExp(`^tgacc_view_${OID}$`), async (ctx) => {
   return showInline(ctx, `📱 <code>+${esc(acc.phone)}</code>`, Markup.inlineKeyboard([
     [Markup.button.callback('Profile ကိုကြည့်ရန်', `tgacc_pf_${acc._id}`)],
     [Markup.button.callback('Code ယူရန်', `tgacc_menu_${acc._id}`)],
-    [Markup.button.callback('Remove From History', `tgacc_rm_${acc._id}`)]
+    [Markup.button.callback('Remove From History', `tgacc_rm_${acc._id}`)],
+    [Markup.button.callback('◀️ Back', 'tgh_1')]
   ]));
 });
+// the link that opens the bought account's own Telegram profile page
+async function tgProfileLink(acc) {
+  if (!acc.tgUserId && !acc.tgUsername && tgSession.configured()) {
+    try { // first time: read it from the session once and remember it
+      const r = await tgSession.checkSession(ai.decrypt(acc.sessionEnc));
+      if (r.ok) { acc.tgUserId = r.id; acc.tgUsername = r.username; await TgAccount.updateOne({ _id: acc._id }, { $set: { tgUserId: r.id, tgUsername: r.username } }); }
+    } catch (err) { console.error('profile lookup failed:', err && err.message || err); }
+  }
+  if (acc.tgUsername) return `https://t.me/${acc.tgUsername}`;
+  if (acc.tgUserId) return `tg://user?id=${acc.tgUserId}`;
+  return `https://t.me/+${acc.phone}`; // fallback: opens by phone number
+}
 bot.action(new RegExp(`^tgacc_pf_${OID}$`), async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
   const acc = await tgOwned(ctx, ctx.match[1]);
   if (!acc) return;
+  const link = await tgProfileLink(acc);
   const pw = tgPwOf(acc);
-  const kb = [];
+  const kb = [[{ text: '👤 Profile Link', url: link }]];
   if (pw) kb.push([copyBtn('💌 Copy 2Step', pw)]);
-  kb.push([{ text: '◀️ နောက်ပြန်', callback_data: `tgacc_view_${acc._id}` }]);
+  kb.push([{ text: '◀️ Back', callback_data: `tgacc_view_${acc._id}` }]);
   return showInline(ctx, tgBoughtText(acc), { reply_markup: { inline_keyboard: kb } });
 });
 bot.action(new RegExp(`^tgacc_menu_${OID}$`), async (ctx) => {

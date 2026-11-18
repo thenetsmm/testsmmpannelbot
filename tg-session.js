@@ -47,7 +47,7 @@ async function checkSession(sessionString) {
   return withClient(sessionString, async (client) => {
     if (!(await client.checkAuthorization())) return { ok: false };
     const me = await client.getMe();
-    return { ok: true, phone: String(me.phone || ''), name: [me.firstName, me.lastName].filter(Boolean).join(' ') };
+    return { ok: true, id: String(me.id), username: String(me.username || ''), phone: String(me.phone || ''), name: [me.firstName, me.lastName].filter(Boolean).join(' ') };
   });
 }
 
