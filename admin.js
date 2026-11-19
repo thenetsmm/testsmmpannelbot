@@ -980,6 +980,66 @@ module.exports = function mountAdminPanel(app, deps) {
       items: rows.map(tgItem)
     });
   }));
+  // --- create a new session right here: phone -> code -> (2FA password) -> save as account
+  const tgErr = (e) => {
+    const m = String((e && (e.errorMessage || e.message)) || e);
+    const map = { PHONE_NUMBER_INVALID: 'ဖုန်းနံပါတ် မမှန်ပါ', PHONE_CODE_INVALID: 'Code မှားနေပါတယ်', PHONE_CODE_EXPIRED: 'Code သက်တမ်းကုန်ပါပြီ - အစက ပြန်စပါ', PASSWORD_HASH_INVALID: '2step password မှားနေပါတယ်', PHONE_NUMBER_BANNED: 'ဒီနံပါတ်ကို Telegram က ban ထားပါတယ်', PHONE_NUMBER_FLOOD: 'Code အကြိမ်များလွန်းပါတယ်၊ ခဏစောင့်ပါ' };
+    const key = Object.keys(map).find(k => m.includes(k));
+    if (key) return fail(400, map[key]);
+    if (/FLOOD_WAIT|FLOOD/.test(m)) return fail(429, 'Telegram က ခဏတားထားပါတယ် (flood wait) - နောက်မှ ပြန်စမ်းပါ');
+    return fail(502, m.slice(0, 200));
+  };
+  api.post('/tglogin/start', wrap(async (req, res) => {
+    const phone = String(req.body.phone || '').replace(/\D/g, '');
+    if (phone.length < 7 || phone.length > 15) throw fail(400, 'ဖုန်းနံပါတ် မမှန်ပါ (country code ပါအောင် - 959xxxxxxxxx)');
+    if (await TgAccount.exists({ phone })) throw fail(409, 'ဒီဖုန်းနံပါတ် ထည့်ပြီးသားပါ');
+    try { res.json({ ok: true, ...(await tgSession.tgLoginStart(phone)) }); } catch (e) { throw tgErr(e); }
+  }));
+  api.post('/tglogin/code', wrap(async (req, res) => {
+    try { res.json({ ok: true, ...(await tgSession.tgLoginCode(String(req.body.loginId || ''), req.body.code)) }); } catch (e) { throw tgErr(e); }
+  }));
+  api.post('/tglogin/password', wrap(async (req, res) => {
+    try { res.json({ ok: true, ...(await tgSession.tgLoginPassword(String(req.body.loginId || ''), String(req.body.password || ''))) }); } catch (e) { throw tgErr(e); }
+  }));
+  api.post('/tglogin/cancel', wrap(async (req, res) => { tgSession.tgLoginCancel(String(req.body.loginId || '')); res.json({ ok: true }); }));
+  api.post('/tglogin/save', wrap(async (req, res) => {
+    const price = num(req.body.price, 'ဈေး', { min: 1, max: 10000000, int: true });
+    let taken;
+    try { taken = tgSession.tgLoginTake(String(req.body.loginId || '')); } catch (e) { throw fail(400, e.message); }
+    const phone = taken.me.phone.replace(/\D/g, '');
+    if (!phone) throw fail(500, 'ဖုန်းနံပါတ် မဖတ်ရပါ');
+    if (await TgAccount.exists({ phone })) throw fail(409, 'ဒီဖုန်းနံပါတ် ထည့်ပြီးသားပါ');
+    const typed = str(req.body.twoStep, '2step password', { max: 100, required: false });
+    const twoStep = typed || taken.password || '';
+    const a = await TgAccount.create({ phone, sessionEnc: ai.encrypt(taken.session), price, twoStepEnc: twoStep ? ai.encrypt(twoStep) : undefined, tgUserId: taken.me.id, tgUsername: taken.me.username, note: str(req.body.note, 'Note', { max: 100, required: false }) });
+    log(req, 'tgaccount_add', phone + ' (new session)');
+    res.json({ ok: true, item: tgItem(a) });
+  }));
+
+  // --- check the codes an account received (newest 5 min / newest ever) and view its profile
+  api.post('/tgaccounts/:id/code', wrap(async (req, res) => {
+    if (!mongoose.isValidObjectId(req.params.id)) throw fail(404, 'မတွေ့ပါ');
+    const a = await TgAccount.findById(req.params.id);
+    if (!a) throw fail(404, 'Account မတွေ့ပါ');
+    let r;
+    try { r = await tgSession.latestLoginCode(ai.decrypt(a.sessionEnc), req.body.mode === '5min' ? 5 : Infinity); }
+    catch (e) { throw fail(502, 'စစ်မရပါ: ' + String(e.message).slice(0, 150)); }
+    res.json({ ok: true, found: !!r, code: r ? r.code : '', date: r ? r.date : null });
+  }));
+  api.post('/tgaccounts/:id/profile', wrap(async (req, res) => {
+    if (!mongoose.isValidObjectId(req.params.id)) throw fail(404, 'မတွေ့ပါ');
+    const a = await TgAccount.findById(req.params.id);
+    if (!a) throw fail(404, 'Account မတွေ့ပါ');
+    let r;
+    try { r = await tgSession.checkSession(ai.decrypt(a.sessionEnc)); }
+    catch (e) { throw fail(502, 'စစ်မရပါ: ' + String(e.message).slice(0, 150)); }
+    if (!r.ok) return res.json({ ok: false });
+    await TgAccount.updateOne({ _id: a._id }, { $set: { tgUserId: r.id, tgUsername: r.username } });
+    const link = r.username ? `https://t.me/${r.username}` : `tg://user?id=${r.id}`;
+    let pw = ''; try { pw = a.twoStepEnc ? ai.decrypt(a.twoStepEnc) : ''; } catch (_) {}
+    res.json({ ok: true, id: r.id, username: r.username, phone: r.phone, name: r.name, link, twoStep: pw, price: a.price || 0 });
+  }));
+
   api.post('/tgaccounts', wrap(async (req, res) => {
     const phone = String(req.body.phone || '').replace(/\D/g, '');
     if (phone.length < 7 || phone.length > 15) throw fail(400, 'ဖုန်းနံပါတ် မမှန်ပါ (country code ပါအောင် - 959xxxxxxxxx)');

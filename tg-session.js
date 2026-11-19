@@ -85,4 +85,70 @@ async function watchNewLogin(sessionString, state, onNotice, intervalMs = 5000) 
   }
 }
 
-module.exports = { latestLoginCode, checkSession, watchNewLogin, configured: () => !!(API_ID && API_HASH) };
+// ---- creating a NEW session from the admin panel (phone -> code -> [2FA password])
+// The half-finished login lives in memory only; the session string is never sent
+// to the browser - the panel saves the account server-side with tgLoginTake().
+const crypto = require('crypto');
+const logins = new Map(); // loginId -> { client, phone, hash, step, password, timer }
+const LOGIN_TTL = 10 * 60 * 1000;
+
+function dropLogin(id) {
+  const l = logins.get(id);
+  if (!l) return;
+  clearTimeout(l.timer);
+  logins.delete(id);
+  Promise.resolve(l.client.disconnect()).catch(() => {}).then(() => l.client.destroy && l.client.destroy()).catch(() => {});
+}
+async function tgLoginStart(phone) {
+  if (!API_ID || !API_HASH) throw Object.assign(new Error('TG_API_ID / TG_API_HASH မသတ်မှတ်ရသေးပါ'), { code: 'NOCONF' });
+  if (logins.size >= 5) throw new Error('Login တစ်ပြိုင်နက် များနေပါတယ်၊ ခဏနေမှ ပြန်စမ်းပါ');
+  const { TelegramClient, sessions } = lib();
+  const client = new TelegramClient(new sessions.StringSession(''), API_ID, API_HASH, { connectionRetries: 2, useWSS: false });
+  client.setLogLevel && client.setLogLevel('none');
+  try {
+    await client.connect();
+    const r = await client.sendCode({ apiId: API_ID, apiHash: API_HASH }, '+' + String(phone).replace(/\D/g, ''));
+    const id = crypto.randomBytes(8).toString('hex');
+    logins.set(id, { client, phone: '+' + String(phone).replace(/\D/g, ''), hash: r.phoneCodeHash, step: 'code', password: '', timer: setTimeout(() => dropLogin(id), LOGIN_TTL) });
+    return { loginId: id, viaApp: !!r.isCodeViaApp };
+  } catch (e) { try { await client.disconnect(); } catch (_) {} throw e; }
+}
+async function finishLogin(l) {
+  const me = await l.client.getMe();
+  l.step = 'ready';
+  l.me = { id: String(me.id), username: String(me.username || ''), phone: String(me.phone || ''), name: [me.firstName, me.lastName].filter(Boolean).join(' ') };
+  l.session = l.client.session.save();
+  return { status: 'ready', ...l.me, hasPassword: !!l.password };
+}
+async function tgLoginCode(id, code) {
+  const l = logins.get(id);
+  if (!l || l.step !== 'code') throw new Error('Login သက်တမ်းကုန်သွားပါပြီ၊ အစက ပြန်စပါ');
+  const { Api } = lib();
+  try {
+    await l.client.invoke(new Api.auth.SignIn({ phoneNumber: l.phone, phoneCodeHash: l.hash, phoneCode: String(code).replace(/\D/g, '') }));
+  } catch (e) {
+    if (e && e.errorMessage === 'SESSION_PASSWORD_NEEDED') { l.step = 'password'; return { status: 'password' }; }
+    throw e;
+  }
+  return finishLogin(l);
+}
+async function tgLoginPassword(id, password) {
+  const l = logins.get(id);
+  if (!l || l.step !== 'password') throw new Error('Login သက်တမ်းကုန်သွားပါပြီ၊ အစက ပြန်စပါ');
+  await l.client.signInWithPassword({ apiId: API_ID, apiHash: API_HASH }, {
+    password: async () => password,
+    onError: async (err) => { throw err; }
+  });
+  l.password = password; // used as the account's 2step password unless the admin types another
+  return finishLogin(l);
+}
+// returns { session, me, password } and closes the login
+function tgLoginTake(id) {
+  const l = logins.get(id);
+  if (!l || l.step !== 'ready') throw new Error('Login မပြီးသေးပါ / သက်တမ်းကုန်သွားပါပြီ');
+  const out = { session: l.session, me: l.me, password: l.password };
+  dropLogin(id);
+  return out;
+}
+
+module.exports = { tgLoginStart, tgLoginCode, tgLoginPassword, tgLoginTake, tgLoginCancel: dropLogin, latestLoginCode, checkSession, watchNewLogin, configured: () => !!(API_ID && API_HASH) };
