@@ -27,3 +27,5 @@ Setup
 4. Admin Panel -> **TG Accounts**: add phone (with country code, any country), the account's own price, optional 2step password, and the session string. **စစ်** tests a session; **ဈေး** edits the price of an unsold account.
 
 Notes: sessions and 2step passwords are stored AES-256-GCM encrypted (key from `AI_KEY_SECRET`, else `BOT_TOKEN` - changing it makes stored values unreadable). Only the Telegram service chat (777000) is read. Code requests have an 8 s cooldown and a per-account cap (`TGACC_MAX_CODE_REQUESTS`, default 40). Buying claims the account atomically, then takes its price; if the balance is too low the account is released again.
+
+New-device notice: after Get Otp / 5min code the bot keeps a connection to that account for 5 minutes (max `30` accounts at once) and forwards Telegram's "New login ... from a new device" message, with the account's phone number, to the buyer.

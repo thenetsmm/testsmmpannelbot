@@ -143,6 +143,7 @@ EXAMPLES (Burmese tone)
   tgacc_none_old: 'ဒီနံပါတ်ဆီ ပို့ထားတဲ့ code မတွေ့ပါရှင့်။',
   tgacc_code_wait: 'ခဏစောင့်ပြီး (${sec} စက္ကန့်) ပြန်နှိပ်ပါရှင့်',
   tgacc_code_error: '⚠️ Code ယူလို့ မရသေးပါရှင့်၊ ခဏနေပြီး ပြန်နှိပ်ပါ။ မရသေးရင် Admin ကို ဆက်သွယ်ပါနော်။',
+  tgacc_newlogin: '🔔 <b>New Device Login</b>\nphone number : <code>+${phone}</code>\n\n<blockquote>${text}</blockquote>',
   tgacc_hist_menu: '📜 Orders History ကိုရွေးချယ်ပါ',
   tgacc_hist: 'သင်ဝယ်ယူထားသောနံပါတ်များ\n(10ရက်ပြည့်လျှင် ဝယ်ယူမှုမှတ်တမ်း History အလိုလျောက်ပျက်ပါမည်)\n<b>(Account ပျက်ခြင်း မဟုတ်ပါ)</b>',
   tgacc_code_choose: 'ကြိုက်နှစ်သက်ရာရွေးချယ်ပါ\n\n• 5မိနစ်အတွင်းပို့ထားသောCodeကိုကြည့်ရန်\n• အရင်ကနောက်ဆုံးပို့ထားသောcodeကိုကြည့်ရန်',

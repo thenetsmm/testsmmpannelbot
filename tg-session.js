@@ -51,4 +51,38 @@ async function checkSession(sessionString) {
   });
 }
 
-module.exports = { latestLoginCode, checkSession, configured: () => !!(API_ID && API_HASH) };
+// Is this 777000 message Telegram's "new login / new device" notice (not a login code)?
+function isNewLoginNotice(text) {
+  if (!text) return false;
+  if (/new login|new device|detected a login|login into your account/i.test(text)) return true;
+  return !/\b\d{5,6}\b/.test(text); // other languages: anything that is not a code message
+}
+
+// Keeps one connection open and calls onNotice(text, date) for every NEW
+// new-device-login notice that arrives until state.until (a ms timestamp the
+// caller may extend). Reads only the Telegram service chat (777000).
+async function watchNewLogin(sessionString, state, onNotice, intervalMs = 5000) {
+  if (!API_ID || !API_HASH) return;
+  const { TelegramClient, sessions } = lib();
+  const client = new TelegramClient(new sessions.StringSession(sessionString), API_ID, API_HASH, { connectionRetries: 2, useWSS: false });
+  client.setLogLevel && client.setLogLevel('none');
+  try {
+    await Promise.race([client.connect(), new Promise((_, rej) => setTimeout(() => rej(new Error('Telegram timeout')), 25000))]);
+    const first = await client.getMessages(777000, { limit: 1 });
+    let lastId = first[0] ? first[0].id : 0;
+    while (Date.now() < state.until) {
+      await new Promise(r => setTimeout(r, intervalMs));
+      const msgs = await client.getMessages(777000, { limit: 5 });
+      const fresh = msgs.filter(m => m.id > lastId).sort((a, b) => a.id - b.id);
+      for (const m of fresh) {
+        lastId = Math.max(lastId, m.id);
+        if (isNewLoginNotice(m.message)) await onNotice(m.message, new Date((m.date || 0) * 1000));
+      }
+    }
+  } finally {
+    try { await client.disconnect(); } catch (_) {}
+    try { client.destroy && await client.destroy(); } catch (_) {}
+  }
+}
+
+module.exports = { latestLoginCode, checkSession, watchNewLogin, configured: () => !!(API_ID && API_HASH) };

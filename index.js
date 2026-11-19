@@ -674,6 +674,24 @@ bot.action(new RegExp(`^tgacc_go_${OID}$`), async (ctx) => {
   } finally { tgBuying.delete(uid); }
 });
 
+// ---- new-device login notice: after a code is handed out, watch the account's
+// Telegram service chat for 5 min and forward "New login..." to the buyer.
+const TGACC_WATCH_MIN = 5, TGACC_MAX_WATCHERS = 30;
+const tgWatchers = new Map(); // accountId -> { until }
+function startTgWatch(acc, uid) {
+  const id = String(acc._id);
+  const until = Date.now() + TGACC_WATCH_MIN * 60 * 1000;
+  const running = tgWatchers.get(id);
+  if (running) { running.until = until; return; }
+  if (!tgSession.configured() || tgWatchers.size >= TGACC_MAX_WATCHERS) return;
+  const state = { until };
+  tgWatchers.set(id, state);
+  tgSession.watchNewLogin(ai.decrypt(acc.sessionEnc), state, async (text) => {
+    await bot.telegram.sendMessage(uid, texts.t('tgacc_newlogin', { phone: esc(acc.phone), text: esc(text) }), { parse_mode: 'HTML' }).catch(() => {});
+  }).catch((err) => console.error('tgacc watch failed:', err && err.message || err))
+    .finally(() => tgWatchers.delete(id));
+}
+
 // ---- reading a code (Get Otp / 5min code / old latest code)
 // mode: otp | c5 (last 5 min) | old (newest ever)
 async function runTgCode(ctx, accId, mode) {
@@ -704,6 +722,7 @@ async function runTgCode(ctx, accId, mode) {
 
   await bot.telegram.deleteMessage(chatId, msgId).catch(() => {}); // the "checking..." note disappears
   const pw = tgPwOf(acc);
+  if (mode !== 'old') startTgWatch(acc, uid); // forward the "New login" notice that follows
   if (mode === 'otp') {
     const kb = pw ? [[copyBtn('💌 Copy 2step psw', pw)]] : [];
     return ctx.reply(texts.t('tgacc_otp_ok', { code: found.code }), { parse_mode: 'HTML', reply_markup: { inline_keyboard: kb } });
