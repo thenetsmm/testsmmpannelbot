@@ -147,7 +147,8 @@ function isFlooding(userId) {
 const BTN_SHOP = '🛍 Shop';
 const BTN_HISTORY = '📜 History';
 const BTN_DEPOSIT = '💰 Deposit';
-const BTN_SUPPORT = '🛟 Support';
+const BTN_SUPPORT = '🆘 Support';
+const LEGACY_SUPPORT = '🛟 Support'; // old bottom-keyboard label
 // Old keyboard texts: people who still have the OLD keyboard on their phone
 // can keep tapping it until they send /start - these map to the new screens.
 const LEGACY_SERVICES = '❤️ရရှိနိုင်သောservice များ❤️';
@@ -458,7 +459,7 @@ Home button ထဲကို service (ဥပမာ ♥️,👍 reaction emoji, �
 ဥပမာ: /couponinfo WELCOME100
 (ဒါက ထုတ်ထားသောစုစုပေါင်း၊ သုံးပြီးသားအရေအတွက်၊ ကျန်ရှိအရေအတွက်၊ ပြီးသုံးထားသူများ၏ နာမည်+id list ကို ပြပေးမည်)
 
-**🛟 Support ထဲ Admin button ထည့်ရန်** (user က Support နှိပ်ရင် "🆘 Order အကူအညီ" နဲ့ ဒီ Admin button ၂ ခု မြင်ရမည်။ Admin ရဲ့ Telegram chat ကို တန်းရောက်စေရန်):
+**🆘 Support ထဲ Admin button ထည့်ရန်** (user က Support နှိပ်ရင် "🆘 Order အကူအညီ" နဲ့ ဒီ Admin button ၂ ခု မြင်ရမည်။ Admin ရဲ့ Telegram chat ကို တန်းရောက်စေရန်):
 /addmenubutton ☎️ Contact Admin|https://t.me/YourAdminUsername
 (YourAdminUsername နေရာမှာ ကိုယ့် Telegram username ကို အစားထိုးပါ)
 
@@ -505,7 +506,7 @@ bot.hears([BTN_SHOP, LEGACY_SERVICES, LEGACY_BALANCE], async (ctx) => { resetSta
 
 bot.hears([BTN_DEPOSIT, LEGACY_TOPUP], async (ctx) => { resetState(ctx.from.id); await ctx.reply('ငွေဖြည့်မည့် နည်းလမ်း ရွေးပါရှင့် ❤️', topupMethodKeyboard()); });
 
-bot.hears([BTN_SUPPORT], async (ctx) => { resetState(ctx.from.id); await showSupport(ctx); });
+bot.hears([BTN_SUPPORT, LEGACY_SUPPORT], async (ctx) => { resetState(ctx.from.id); await showSupport(ctx); });
 
 // paginated, tidy order history (5 per page) with copyable order numbers
 async function sendHistory(ctx, page = 1, edit = false) {
@@ -597,8 +598,11 @@ async function showShopHome(ctx) {
     `🔖 Username : ${esc(uname)}\n` +
     `💰 Balance : <b>${nf(u && u.balance)}</b> ကျပ်\n\n` +
     `👇 ဝယ်ယူလိုသည့် ဝန်ဆောင်မှု ရွေးပါရှင့်`;
+  // price on the button = price of the NEXT account that would be sold (oldest in stock)
+  const nextAcc = await TgAccount.findOne({ status: 'available' }).sort({ createdAt: 1 }).select('price').lean();
+  const tgLabel = nextAcc && nextAcc.price && texts.getRaw('tgacc_enabled') !== '0' ? `Telegram Account———${nextAcc.price}KS` : 'Telegram Account';
   const kb = Markup.inlineKeyboard([
-    [Markup.button.callback('📱 Telegram Account', 'tg_account')],
+    [Markup.button.callback(tgLabel, 'tg_account')],
     [Markup.button.callback('🚀 Boost Service', 'boost')]
   ]);
   return showInline(ctx, text, kb);
@@ -915,7 +919,7 @@ async function showSupport(ctx) {
   if (links.length) for (const b of links) rows.push([Markup.button.url(String(b._id), b.url)]);
   else if (tgUrlOk(process.env.SUPPORT_ADMIN_URL)) rows.push([Markup.button.url('☎️ Support Admin', process.env.SUPPORT_ADMIN_URL)]);
   else rows.push([Markup.button.callback('☎️ Support Admin', 'sup_admin_missing')]);
-  await ctx.reply('🛟 <b>Support</b>\n\nဘာကူညီပေးရမလဲရှင့် 😊\nအောက်က ခလုတ်တစ်ခုခု ရွေးပါ 👇', { parse_mode: 'HTML', reply_markup: Markup.inlineKeyboard(rows).reply_markup });
+  await ctx.reply('🆘 <b>Support</b>\n\nဘာကူညီပေးရမလဲရှင့် 😊\nအောက်က ခလုတ်တစ်ခုခု ရွေးပါ 👇', { parse_mode: 'HTML', reply_markup: Markup.inlineKeyboard(rows).reply_markup });
 }
 bot.action('sup_help', async (ctx) => { await ctx.answerCbQuery().catch(() => {}); await openHelp(ctx); });
 bot.action('sup_admin_missing', (ctx) => ctx.answerCbQuery('Admin link မသတ်မှတ်ရသေးပါ - ခဏနေမှ ပြန်ကြိုးစားပါနော်', { show_alert: true }).catch(() => {}));
@@ -929,7 +933,7 @@ const MYANMAR_DIGITS = /[၀-၉]/;
 // every reply-keyboard button the bot shows (fixed ones + admin-added ones are
 // handled by the MenuButton lookup above). Used to keep the AI from answering them.
 function isMenuButtonText(t) {
-  return [BTN_SHOP, BTN_HISTORY, BTN_DEPOSIT, BTN_SUPPORT, LEGACY_SERVICES, LEGACY_BALANCE, LEGACY_TOPUP, LEGACY_HISTORY, LEGACY_COUPON, LEGACY_BACK, LEGACY_HELP].includes(t);
+  return [BTN_SHOP, BTN_HISTORY, BTN_DEPOSIT, BTN_SUPPORT, LEGACY_SUPPORT, LEGACY_SERVICES, LEGACY_BALANCE, LEGACY_TOPUP, LEGACY_HISTORY, LEGACY_COUPON, LEGACY_BACK, LEGACY_HELP].includes(t);
 }
 
 bot.on('text', async (ctx, next) => {
@@ -1888,7 +1892,7 @@ bot.command('addmenubutton', async (ctx) => {
   }
   const [label, url] = parts;
   await MenuButton.findByIdAndUpdate(label, { _id: label, url }, { upsert: true });
-  await ctx.reply(`✅ Menu button "${label}" ထည့်ပြီးပါပြီ (🛟 Support ထဲမှာ ပေါ်ပါလိမ့်မယ်)။`);
+  await ctx.reply(`✅ Menu button "${label}" ထည့်ပြီးပါပြီ (🆘 Support ထဲမှာ ပေါ်ပါလိမ့်မယ်)။`);
 });
 
 bot.command('removemenubutton', async (ctx) => {
